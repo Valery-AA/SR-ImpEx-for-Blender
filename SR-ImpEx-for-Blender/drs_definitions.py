@@ -24,6 +24,15 @@ AnimationType = {
 	"WormMovement": 5,
 }
 
+AnimationType = {
+	"CastResolve": 0,
+	"Spawn": 1,
+	"Melee": 2,
+	"Channel": 3,
+	"ModeSwitch": 4, 
+	"WormMovement": 5,
+}
+
 
 class UnknownStruct():
 	"""UnknownStruct"""
@@ -1244,7 +1253,7 @@ class DRS():
 		self.MeshSetGridNode: Node = None
 		self.CDrwLocatorListNode: Node = None
 		self.AnimationSet: AnimationSet = None
-		self.CDspMeshFile: CDspMeshFile = None
+		self.CDspMeshFileData: CDspMeshFile = None
 		self.CGeoMesh: CGeoMesh = None
 		self.CSkSkinInfo: CSkSkinInfo = None
 		self.CSkSkeleton: CSkSkeleton = None
@@ -1256,6 +1265,7 @@ class DRS():
 		self.CollisionShape: CollisionShape = None
 		# self.EffectSet: EffectSet = None
 		self.MeshSetGrid: MeshSetGrid = None
+		self.IsSkinned: bool = False
 
 	def Read(self, FileName: str) -> 'DRS':
 		"""Reads the DRS from the file"""
@@ -1285,6 +1295,7 @@ class DRS():
 				self.CSkSkinInfoFileNodeInformation = _NodeInformation
 			elif _NodeInformation.Magic == -2110567991: # CSkSkeleton
 				self.CSkSkeletonFileNodeInformation = _NodeInformation
+				self.IsSkinned = True
 			elif _NodeInformation.Magic == -1403092629: # AnimationTimings
 				self.AnimationTimingsInformation = _NodeInformation
 			elif _NodeInformation.Magic == -1340635850: # JointMap
@@ -1350,7 +1361,7 @@ class DRS():
 
 		if self.CDspMeshFileNode is not None:
 			Reader.Seek(self.CDspMeshFileNodeInformation.Offset)
-			self.CDspMeshFile = CDspMeshFile().Read(Reader)
+			self.CDspMeshFileData = CDspMeshFile().Read(Reader)
 
 		if self.CGeoMeshNode is not None:
 			Reader.Seek(self.CGeoMeshFileNodeInformation.Offset)
@@ -2044,13 +2055,14 @@ class CollisionShape():
 
 	def Read(self, Buffer: FileReader) -> 'CollisionShape':
 		"""Reads the CollisionShape from the buffer"""
-		self.Version = Buffer.ReadByte()
-		self.BoxCount = Buffer.ReadInt()
-		self.Boxes = [BoxShape().Read(Buffer) for _ in range(self.BoxCount)]
-		self.SphereCount = Buffer.ReadInt()
-		self.Spheres = [SphereShape().Read(Buffer) for _ in range(self.SphereCount)]
-		self.CylinderCount = Buffer.ReadInt()
-		self.Cylinders = [CylinderShape().Read(Buffer) for _ in range(self.CylinderCount)]
+		# Some Files have a different Layout. Needs Investigation, we dont import These Values anyway!
+		# self.Version = Buffer.ReadByte()
+		# self.BoxCount = Buffer.ReadInt()
+		# self.Boxes = [BoxShape().Read(Buffer) for _ in range(self.BoxCount)]
+		# self.SphereCount = Buffer.ReadInt()
+		# self.Spheres = [SphereShape().Read(Buffer) for _ in range(self.SphereCount)]
+		# self.CylinderCount = Buffer.ReadInt()
+		# self.Cylinders = [CylinderShape().Read(Buffer) for _ in range(self.CylinderCount)]
 		return self
 
 	def Write(self, Buffer: FileWriter) -> 'CollisionShape':
@@ -2092,6 +2104,138 @@ class CollisionShape():
 
 
 
+
+class Timing():
+	'''Timing'''
+	def __init__(self) -> None:
+		'''Timing Constructor'''
+		self.CastMs: int # Int
+		self.ResolveMs: int # Int
+		self.UK1: float # Float
+		self.UK2: float # Float
+		self.UK3: float # Float
+		self.AnimationMarkerID: int # Int
+		# NOTICE:
+		# When tying the visual animation to the game logic,
+		# the castMs/resolveMs seem to get converted into game ticks by simply dividing them by 100.
+		# So while the visual part of the animation is handled in milliseconds,
+		# the maximum precision for the game logic is in deciseconds/game ticks.
+		#
+		# Meaning of the variables below:
+		# For type Spawn:
+		# castMs is the duration it will take until the unit can be issued commands or lose damage immunity
+		# If castMs is for zero game ticks (< 100), then the animation is skipped entirely.
+		# If castMs is for exactly one game tick (100-199), it seems to bug out.
+		# Therefore the minimum value here should be 200, if you wish to play a spawn animation.
+		# resolveMs is the duration the spawn animation will play out for in total.
+		# This should match the total time from the .ska file, otherwise it looks weird.
+		# If you wish to slow down/speed up the animation, you can change the total time in the .ska file.
+		#
+		# For type CastResolve:
+		# castMs is the duration it will take the unit to start casting its ability (can still be aborted)
+		# If castMs is for zero game ticks (< 100), then the ability skips the cast stage
+		# and instantly moves onto the resolve stage.
+		# resolveMs is the duration it will take the unit to finish casting its ability (cannot be aborted)
+		# It seems the stage cannot be skipped and uses a minimum duration of 1 game tick,
+		# even if a value < 100 is specified.
+		# The animation is automatically slowed down/sped up based on these timings.
+		# The total time from the .ska file is ignored.
+		#
+		# For type ModeSwitch:
+		# castMs is the duration it will take the unit to start its mode switch animation.
+		# If castMs is for zero game ticks (< 100), then the mode switch is done instantly
+		# and also does not interrupt movement. During castMs, any commands are blocked.
+		# resolveMs seems to be ignored here. The unit can be issued new commands after the cast time.
+		# If you wish to slow down/speed up the animation, you can change the total time in the .ska file.
+		#
+		# For type Melee/WormMovement No experiments conducted yet.
+		#  castMs;
+		#  resolveMs;
+		# at uk1;
+		# at uk2;
+		# 
+		# Can be used to link an AnimationMarkerSet to a timing.
+		# Relevant field: AnimationMarkerSet.animationMarkerID
+		#
+		# Seems to be often used for Spawn animations.
+		# In cases where e.g. the animationTagID is used,
+		# the animationMarkerID usually not referenced anywhere.
+
+class TimingVariant():
+	'''TimingVariant'''
+	def __init__(self) -> None:
+		'''TimingVariant Constructor'''
+		self.Weight: int # Byte. The weight of this variant. The higher the weight, the more likely it is to be chosen.
+		self.VariantIndex: int # Byte.
+		self.TimingCount: int # Short. The number of Timings for this Variant. Most of the time, this is 1.
+		self.Timings: List[Timing]
+
+class AnimationTiming():
+	'''AnimationTiming'''
+	def __init__(self) -> None:
+		'''AnimationTiming Constructor'''
+		self.AnimationType: int = AnimationType['CastResolve']
+		self.AnimationTagID: int = 0
+		self.IsEnterModeAnimation: int = 0 # Short. This is 1 most of the time.
+		self.VariantCount: int # Short. The number of Animations for this Type/TagID combination.
+		self.TimingVariants: List[TimingVariant]
+
+class StructV3():
+	'''StructV3'''
+	def __init__(self) -> None:
+		'''StructV3 Constructor'''
+		self.Length: int = 1
+		self.Unknown: List[int] = [0, 0]
+
+	def Write(self, Buffer: FileWriter) -> 'StructV3':
+		'''Writes the StructV3 to the buffer'''
+		Buffer.WriteInt(self.Length)
+		for Unknown in self.Unknown:
+			Buffer.WriteInt(Unknown)
+		return self
+	
+	def Size(self) -> int:
+		"""Returns the size of the ModeAnimationKey"""
+		add = 0
+		for Variant in self.AnimationSetVariants:
+			add += Variant.Size()
+		return 39 + add
+	
+	def Size(self) -> int:
+		'''Returns the size of the StructV3'''
+		return 12
+
+class AnimationTimings():
+	"""AnimationTimings"""
+	def __init__(self):
+		"""AnimationTimings Constructor"""
+		self.Magic: int = 1650881127
+		self.Version: int = 4 # Short. 3 or 4
+		self.AnimationTimingCount: int = 0 # Short. Only used if there are multiple Animations.
+		self.AnimationTimings: List[AnimationTiming]
+		self.StructV3: StructV3 = StructV3()
+
+	def Write(self, Buffer: FileWriter) -> 'AnimationTimings':
+		"""Writes the AnimationTimings to the buffer"""
+		Buffer.WriteInt(self.Magic)
+		Buffer.WriteShort(self.Version)
+		Buffer.WriteShort(self.AnimationTimingCount)
+		if self.AnimationTimingCount > 0:
+			# TODO
+			pass
+		self.StructV3.Write(Buffer)
+		return self
+	
+	def Size(self) -> int:
+		"""Returns the size of the AnimationTimings"""
+		return 8 + self.StructV3.Size()
+
+	def Size(self) -> int:
+		"""Returns the size of the AnimationSet"""
+		add = 0
+		for Key in self.ModeAnimationKeys:
+			add += Key.Size()
+		return 62 + add
 
 class Timing():
 	'''Timing'''
